@@ -1,0 +1,66 @@
+[
+  {
+    "name": "users",
+    "description": "用户信息表，存储平台注册用户的基本信息",
+    "columns": [
+      { "name": "user_id", "type": "BIGINT", "description": "用户唯一标识", "isPrimaryKey": true },
+      { "name": "username", "type": "VARCHAR(64)", "description": "用户名" },
+      { "name": "email", "type": "VARCHAR(128)", "description": "邮箱地址" },
+      { "name": "phone", "type": "VARCHAR(20)", "description": "手机号" },
+      { "name": "status", "type": "TINYINT", "description": "状态：0-禁用 1-正常" },
+      { "name": "created_at", "type": "DATETIME", "description": "注册时间" },
+      { "name": "updated_at", "type": "DATETIME", "description": "最后更新时间" }
+    ]
+  },
+  {
+    "name": "orders",
+    "description": "订单表，记录所有交易订单",
+    "columns": [
+      { "name": "order_id", "type": "BIGINT", "description": "订单唯一标识", "isPrimaryKey": true },
+      { "name": "user_id", "type": "BIGINT", "description": "下单用户ID", "isForeignKey": true, "references": "users.user_id" },
+      { "name": "product_id", "type": "BIGINT", "description": "商品ID", "isForeignKey": true, "references": "products.product_id" },
+      { "name": "quantity", "type": "INT", "description": "购买数量" },
+      { "name": "total_amount", "type": "DECIMAL(10,2)", "description": "订单总金额" },
+      { "name": "status", "type": "VARCHAR(20)", "description": "订单状态：pending/completed/cancelled/refunded" },
+      { "name": "order_date", "type": "DATETIME", "description": "下单时间" },
+      { "name": "completed_at", "type": "DATETIME", "description": "完成时间" }
+    ]
+  },
+  {
+    "name": "products",
+    "description": "商品表，存储所有在售商品信息",
+    "columns": [
+      { "name": "product_id", "type": "BIGINT", "description": "商品唯一标识", "isPrimaryKey": true },
+      { "name": "product_name", "type": "VARCHAR(128)", "description": "商品名称" },
+      { "name": "category", "type": "VARCHAR(64)", "description": "商品类目" },
+      { "name": "price", "type": "DECIMAL(10,2)", "description": "商品单价" },
+      { "name": "stock", "type": "INT", "description": "库存数量" },
+      { "name": "status", "type": "TINYINT", "description": "状态：0-下架 1-上架" },
+      { "name": "created_at", "type": "DATETIME", "description": "上架时间" }
+    ]
+  },
+  {
+    "name": "payments",
+    "description": "支付记录表，记录每笔支付的详细信息",
+    "columns": [
+      { "name": "payment_id", "type": "BIGINT", "description": "支付记录唯一标识", "isPrimaryKey": true },
+      { "name": "order_id", "type": "BIGINT", "description": "关联订单ID", "isForeignKey": true, "references": "orders.order_id" },
+      { "name": "amount", "type": "DECIMAL(10,2)", "description": "支付金额" },
+      { "name": "method", "type": "VARCHAR(20)", "description": "支付方式：alipay/wechat/card" },
+      { "name": "status", "type": "VARCHAR(20)", "description": "支付状态：pending/success/failed/refunded" },
+      { "name": "paid_at", "type": "DATETIME", "description": "支付时间" }
+    ]
+  },
+  {
+    "name": "reviews",
+    "description": "评价表，存储用户对商品的评价",
+    "columns": [
+      { "name": "review_id", "type": "BIGINT", "description": "评价唯一标识", "isPrimaryKey": true },
+      { "name": "user_id", "type": "BIGINT", "description": "评价用户ID", "isForeignKey": true, "references": "users.user_id" },
+      { "name": "product_id", "type": "BIGINT", "description": "商品ID", "isForeignKey": true, "references": "products.product_id" },
+      { "name": "rating", "type": "TINYINT", "description": "评分 1-5" },
+      { "name": "content", "type": "TEXT", "description": "评价内容" },
+      { "name": "created_at", "type": "DATETIME", "description": "评价时间" }
+    ]
+  }
+]
