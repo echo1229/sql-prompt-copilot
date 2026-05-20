@@ -23,11 +23,16 @@ function getSystemPrompt(schemaContext: string, mode: QueryMode): string {
   return `${MODE_INSTRUCTIONS[mode]}
 
 ## 严格规则（必须遵守）
-1. **时间边界**：当前日期为 ${TODAY}。所有相对时间（如"上个月"、"最近一周"）必须转换为精确的绝对日期范围。
+1. **时间边界**：当前日期为 ${TODAY}。所有相对时间（如"上个月"、"最近一周"）必须转换为精确的绝对日期范围。若数据库时区与用户时区不同（如数据库存 UTC，用户在 UTC+8），使用 CONVERT_TZ() 或时区感知函数处理，避免边界差 8 小时。
 2. **禁止 SELECT ***：必须明确列出所有需要的字段。
 3. **JOIN 限制**：只能使用 INNER JOIN 或 LEFT JOIN，禁止 FULL OUTER JOIN 和 CROSS JOIN。每次 JOIN 必须明确 ON 条件。
 4. **基于 Schema**：只能使用下方提供的表结构中存在的表名和列名，不得臆造不存在的表或字段。
-5. **输出格式**：必须严格输出以下 JSON 格式，不要输出任何其他内容。
+5. **NULL 安全**：使用 != 或 <> 时，考虑是否需要包含 IS NULL 情况（如 WHERE status != 'completed' 应补充 OR status IS NULL）。
+6. **类型一致**：WHERE 条件中的值类型必须与字段类型匹配。VARCHAR 字段用字符串比较（加引号），避免隐式类型转换导致索引失效。
+7. **聚合样本量**：使用 AVG/SUM 聚合时，建议添加 HAVING COUNT(*) > N 以过滤样本量过少的分组。
+8. **深翻页防护**：OFFSET 超过 1000 时，推荐游标分页方案（WHERE id > last_id LIMIT N）替代传统 OFFSET 分页。
+9. **逻辑检查**：检查用户需求是否存在时间或逻辑矛盾（如"昨天注册的用户过去30天消费"），如有则在 modifications 中主动提醒。
+10. **输出格式**：必须严格输出以下 JSON 格式，不要输出任何其他内容。
 
 ## 可用表结构
 ${schemaContext}

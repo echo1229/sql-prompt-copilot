@@ -38,6 +38,25 @@ function extractColumnsFromSQL(sql: string): string[] {
   return [...new Set(columns)];
 }
 
+function extractWhereColumnsFromSQL(sql: string): string[] {
+  const columns: string[] = [];
+  // Match WHERE/AND/OR column references
+  const whereMatch = sql.match(/\bWHERE\b([\s\S]*?)(?:\bGROUP\b|\bORDER\b|\bLIMIT\b|\bHAVING\b|$)/i);
+  if (whereMatch) {
+    // Match column = value, column != value, column > value, etc.
+    const colPattern = /\b([a-zA-Z_]\w*)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)/gi;
+    let match;
+    while ((match = colPattern.exec(whereMatch[1])) !== null) {
+      const colName = match[1].toLowerCase();
+      // Skip SQL keywords
+      if (!['and', 'or', 'not', 'null', 'true', 'false', 'select', 'exists'].includes(colName)) {
+        columns.push(colName);
+      }
+    }
+  }
+  return [...new Set(columns)];
+}
+
 export function validateAIResponse(
   response: AIResponse,
   schema: SchemaTable[] | null
@@ -73,8 +92,16 @@ export function validateAIResponse(
     }
   }
 
+  // Validate WHERE columns
+  const whereColumns = extractWhereColumnsFromSQL(sql);
+  for (const col of whereColumns) {
+    if (!knownColumns.has(col)) {
+      warnings.push(`字段 "${col}" 未在 Schema 中找到，请确认`);
+    }
+  }
+
   // Check for SELECT *
-  if (/\bSELECT\s+\*\b/i.test(sql)) {
+  if (/\bSELECT\s+\*(?=\s|$)/i.test(sql)) {
     warnings.push("检测到 SELECT *，建议明确列出字段");
   }
 

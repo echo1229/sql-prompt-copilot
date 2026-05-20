@@ -6,6 +6,48 @@ use sqlx::sqlite::SqliteConnection;
 use sqlx::{Connection, Row};
 use tauri::State;
 
+// ════════════════════════════════════════════════════════════════
+// 系统 Keychain 凭据管理
+// ════════════════════════════════════════════════════════════════
+
+const KEYRING_SERVICE: &str = "sql-prompt-copilot";
+
+fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| format!("Keychain 访问失败: {}", e))
+}
+
+#[tauri::command]
+pub fn save_credential(account: String, secret: String) -> Result<(), String> {
+    let entry = keyring_entry(&account)?;
+    entry.set_password(&secret).map_err(|e| format!("保存凭据失败: {}", e))
+}
+
+#[tauri::command]
+pub fn get_credential(account: String) -> Result<Option<String>, String> {
+    let entry = keyring_entry(&account)?;
+    match entry.get_password() {
+        Ok(pwd) => Ok(Some(pwd)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("读取凭据失败: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn delete_credential(account: String) -> Result<(), String> {
+    let entry = keyring_entry(&account)?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()), // 已经不存在也算成功
+        Err(e) => Err(format!("删除凭据失败: {}", e)),
+    }
+}
+
+/// 从 localStorage 迁移密码到 Keychain（前端调用一次后删除 localStorage）
+#[tauri::command]
+pub fn migrate_credential(account: String, password: String) -> Result<(), String> {
+    save_credential(account, password)
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub enum DbType {
     #[serde(rename = "mysql")]
@@ -17,9 +59,11 @@ pub enum DbType {
 }
 
 fn build_url(db_type: &DbType, host: &str, port: u16, user: &str, password: &str, database: &str) -> String {
+    let encoded_pwd = urlencoding::encode(password);
+    let encoded_user = urlencoding::encode(user);
     match db_type {
-        DbType::MySql => format!("mysql://{}:{}@{}:{}/{}", user, password, host, port, database),
-        DbType::Postgres => format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, database),
+        DbType::MySql => format!("mysql://{}:{}@{}:{}/{}", encoded_user, encoded_pwd, host, port, database),
+        DbType::Postgres => format!("postgres://{}:{}@{}:{}/{}", encoded_user, encoded_pwd, host, port, database),
         DbType::Sqlite => format!("sqlite://{}", database),
     }
 }

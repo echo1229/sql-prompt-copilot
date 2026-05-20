@@ -17,6 +17,7 @@
 - [使用指南](#使用指南)
 - [AI 模型配置](#ai-模型配置)
 - [数据库连接](#数据库连接)
+- [查询历史](#查询历史)
 - [架构设计](#架构设计)
 - [项目结构](#项目结构)
 - [技术指标](#技术指标)
@@ -40,7 +41,7 @@
 
 ### SQL 执行逻辑可视化（核心）
 
-通过 **SQL Parser → AST → DAG** 编译级处理，将查询解析为可视化的执行流程图：
+通过 **SQL Parser → AST → IR → DAG** 编译级处理，将查询解析为可视化的执行流程图：
 
 - **紫色节点** — 数据源表
 - **绿色节点** — SQL 操作（WHERE / JOIN / ORDER BY）
@@ -54,6 +55,19 @@ AST 驱动的自动分析：
 | SELECT * | 提示明确列出字段 |
 | 缺失 LIMIT | 大数据集性能风险提示 |
 | 禁用 JOIN | FULL OUTER / CROSS JOIN 警告 |
+| 写操作警告 | INSERT/UPDATE/DELETE 自动提醒 |
+| 无 WHERE 写操作 | UPDATE/DELETE 无 WHERE 条件时标红 |
+
+### 多方言支持
+
+统一中间 IR（Intermediate Representation），归一化不同方言 AST：
+
+| 操作 | MySQL | PostgreSQL | SQLite |
+|------|-------|------------|--------|
+| SELECT | ✅ | ✅ | ✅ |
+| INSERT | ✅ | ✅ | ✅ |
+| UPDATE | ✅ | ✅ | ✅ |
+| DELETE | ✅ | ✅ | ✅ |
 
 ### 多模型 AI 支持
 
@@ -76,22 +90,57 @@ AST 驱动的自动分析：
 - 支持 **MySQL** / **PostgreSQL** / **SQLite**
 - 连接后自动替代本地 schema，AI 基于真实表结构生成
 - 仅拉取元数据（表名、字段、类型），不执行用户 SQL
+- **密码安全存储** — 使用系统 Keychain（macOS Keychain / Windows Credential Manager / Linux Secret Service），不存明文
+
+### BM25 语义匹配（RAG）
+
+Schema 匹配从纯子串升级为 BM25 评分算法：
+
+- **智能分词**：处理 camelCase（`userId` → `user` + `id`）、snake_case（`user_id` → `user` + `id`）、中文逐字拆分
+- **同义词扩展**：20+ 组中英文对照（用户↔user、订单↔order、销售↔sale 等）
+- **BM25 评分**：`k1=1.5, b=0.75`，考虑词频、文档频率、文档长度归一化
+- **表名精确匹配加分**：表名包含查询关键词时额外 +10 分
 
 ### 防幻觉工程
 
 工程层面的多层校验，而非仅靠提示词：
 
 ```
-Prompt 层 → 时间边界 / 禁止 SELECT * / JOIN 限制 / Schema 绑定
+Prompt 层（10 条规则）
+  → 时间边界 + 时区处理（CONVERT_TZ）
+  → 禁止 SELECT *
+  → JOIN 限制（INNER/LEFT only）
+  → Schema 绑定（不臆造表/字段）
+  → NULL 安全（!= 时考虑 IS NULL）
+  → 类型一致（VARCHAR 用字符串比较）
+  → 聚合样本量（AVG/SUM 建议 HAVING COUNT(*) > N）
+  → 深翻页防护（OFFSET > 1000 推荐游标分页）
+  → 逻辑矛盾检测（时间条件自洽性）
+  → 输出格式（JSON 强制格式）
+
 输出层   → JSON 强制格式 / 结构化解析
-校验层   → 表名字段名校验 / AST 解析 / DAG 分析 / 警告提示
+校验层   → 表名+字段名校验（含 WHERE 列） / AST 解析 / DAG 分析 / 警告提示
 ```
+
+### 生产坑位防护
+
+通过 12 条真实生产事故场景测试验证：
+
+| 坑位 | 场景 | 防护层 |
+|------|------|--------|
+| 时区陷阱 | 数据库 UTC，用户 UTC+8，"今天"边界差 8h | Prompt 规则（CONVERT_TZ） |
+| NULL 语义 | `WHERE status != 'completed'` 漏掉 NULL 行 | Prompt 规则 |
+| 隐式类型转换 | VARCHAR 字段用数字匹配，索引失效 | Prompt 规则 + WHERE 列校验 |
+| 聚合误导 | AVG 被异常值拉高，缺少样本量过滤 | Prompt 规则 |
+| 深翻页 | OFFSET 199980 扫描 20 万行 | Prompt 规则 |
+| 需求矛盾 | 昨天注册 + 30 天消费，逻辑自相矛盾 | Prompt 规则 |
 
 ### 安全设计
 
 - **本地优先** — Schema 匹配和配置存储均在本地完成
 - **不执行 SQL** — 数据库连接仅用于元数据查询
-- **Key 本地存储** — API Key 存储在浏览器 localStorage
+- **Keychain 存储** — 数据库密码存系统 Keychain，不存明文
+- **URL 编码** — 密码特殊字符自动编码，防止泄露
 - **无数据外泄** — 数据仅发送到用户自己配置的 AI 接口
 
 ---
@@ -156,6 +205,7 @@ npm run tauri build
 | 复制 SQL | 点击"复制"按钮（Toast 提示） |
 | 配置 AI | 右上角齿轮图标 → AI 模型 |
 | 连接数据库 | 右上角齿轮图标 → 数据库 |
+| 查看历史 | 点击历史图标打开历史面板 |
 | 移动窗口 | 按住窗口任意空白区域拖动 |
 | 清除结果 | 点击右上角"清除"按钮 |
 
@@ -167,7 +217,7 @@ npm run tauri build
 输入：查最近 7 天每个品类的订单总额，按金额降序
 
 输出：
-├── 自动匹配 orders 表和 products 表
+├── 自动匹配 orders 表和 products 表（BM25 语义匹配）
 ├── "最近 7 天" → 2026-04-27 ~ 2026-05-04
 ├── 严谨 SQL（可一键复制）
 ├── DAG 执行流程图
@@ -177,7 +227,7 @@ npm run tauri build
 **案例 2：连接数据库后生成**
 
 ```
-1. 设置 → 数据库 → 连接本地 MySQL
+1. 设置 → 数据库 → 连接本地 MySQL（密码自动存入 Keychain）
 2. 自动拉取所有表结构（表名、字段、类型、主键、外键）
 3. 输入"查上周退款金额最大的订单"
 4. AI 基于真实表结构生成精准 SQL
@@ -193,6 +243,17 @@ npm run tauri build
 ├── 优化后的 SQL（列出具体字段 + 添加 LIMIT）
 ├── DAG 可视化
 └── 修改记录
+```
+
+**案例 4：写操作可视化**
+
+```
+输入：UPDATE orders SET status = 'cancelled' WHERE created_at < '2026-01-01'
+
+输出：
+├── DAG：orders 表 → UPDATE 节点 → Affected Rows
+├── 警告：检测到 UPDATE 写操作，请确认意图
+└── SQL + 修改记录
 ```
 
 ---
@@ -245,7 +306,33 @@ npm run tauri build
 
 - 仅执行元数据查询（`information_schema` / `pragma_table_info`）
 - 不执行用户输入的 SQL
-- 连接信息存储在本地 localStorage
+- **数据库密码存储在系统 Keychain**（非 localStorage 明文）
+- 首次使用新版本时自动迁移旧密码到 Keychain
+
+---
+
+## 查询历史
+
+使用 `tauri-plugin-sql`（SQLite）实现本地持久化查询历史。
+
+### 功能
+
+- **自动记录**：每次查询自动保存 SQL、连接名、模式、状态、耗时
+- **搜索**：按 SQL 内容和连接名搜索
+- **收藏**：标记常用查询，一键回填
+- **分组**：按连接名筛选
+- **清空**：支持清空非收藏记录
+
+### 快捷操作
+
+| 操作 | 方式 |
+|------|------|
+| 打开历史面板 | 点击工具栏历史图标 |
+| 搜索 | 输入关键词实时过滤 |
+| 仅收藏 | 点击星标按钮切换 |
+| 回填 SQL | 点击历史记录 |
+| 复制 SQL | 悬停后点击复制图标 |
+| 删除 | 悬停后点击删除图标 |
 
 ---
 
@@ -262,10 +349,10 @@ npm run tauri build
 │  └────┬─────┘  └────┬─────┘  │ │ SQL   │ │ DAG │ │  │
 │       │              │        │ └───────┘ └─────┘ │  │
 │  ┌────▼──────────────▼────┐  └───────────────────┘  │
-│  │     AI Service Layer   │                          │
-│  │  ┌──────┐ ┌─────────┐  │                          │
-│  │  │ RAG  │ │ Provider│  │                          │
-│  │  │ Match│ │ Adapter │  │                          │
+│  │     AI Service Layer   │  ┌───────────────────┐  │
+│  │  ┌──────┐ ┌─────────┐  │  │  History Panel    │  │
+│  │  │ BM25 │ │ Provider│  │  │  (SQLite 持久化)   │  │
+│  │  │ RAG  │ │ Adapter │  │  └───────────────────┘  │
 │  │  └──────┘ └─────────┘  │                          │
 │  └────────────┬───────────┘                          │
 │               │ invoke()                              │
@@ -274,8 +361,8 @@ npm run tauri build
 │  ┌────────────▼───────────┐                          │
 │  │     Tauri Commands     │                          │
 │  │  ┌──────┐ ┌─────────┐  │                          │
-│  │  │ DB   │ │ Window  │  │                          │
-│  │  │ Conn │ │ Control │  │                          │
+│  │  │ DB   │ │ Keyring │  │                          │
+│  │  │ Conn │ │ (安全)   │  │                          │
 │  │  └──────┘ └─────────┘  │                          │
 │  └────────────────────────┘                          │
 └─────────────────────────────────────────────────────┘
@@ -284,13 +371,15 @@ npm run tauri build
 ### 数据流
 
 ```
-用户输入 → Schema RAG 匹配 → Prompt 构建 → AI API 调用
-                                                  ↓
-                                            JSON 解析
-                                                  ↓
-                                    SQL 校验 → AST 解析 → DAG 生成
-                                                  ↓
-                                          结果展示 + 警告
+用户输入 → BM25 RAG 匹配（含同义词） → Prompt 构建 → AI API 调用
+                                                        ↓
+                                                  JSON 解析
+                                                        ↓
+                                          SQL 校验 → AST → IR → DAG
+                                                        ↓
+                                                结果展示 + 警告
+                                                        ↓
+                                              保存到查询历史
 ```
 
 ---
@@ -306,29 +395,32 @@ sql-prompt-copilot/
 │   │   ├── DAGVisualization.tsx    # SQL AST DAG 可视化
 │   │   ├── SettingsPanel.tsx       # 设置面板（AI / 数据库）
 │   │   ├── DatabasePanel.tsx       # 数据库连接面板
+│   │   ├── HistoryPanel.tsx        # 查询历史面板（搜索/收藏/回填）
 │   │   └── Toast.tsx               # Toast 通知组件
 │   ├── lib/
 │   │   ├── aiService.ts            # AI API 适配层（OpenAI / Anthropic）
 │   │   ├── promptBuilder.ts        # 提示词构建（三种模式）
-│   │   ├── schemaRAG.ts            # Schema 关键词检索匹配
-│   │   ├── sqlParser.ts            # SQL AST → DAG 转换
-│   │   └── sqlValidator.ts         # SQL 输出校验
+│   │   ├── schemaRAG.ts            # BM25 语义匹配 + 同义词扩展
+│   │   ├── sqlParser.ts            # SQL AST → 统一 IR → DAG
+│   │   ├── sqlValidator.ts         # SQL 输出校验
+│   │   ├── historyService.ts       # 查询历史 CRUD（SQLite）
+│   │   └── credentialService.ts    # 系统 Keychain 凭据管理
 │   ├── hooks/
 │   │   ├── useAI.ts                # AI 调用 + 校验流程
-│   │   ├── useDatabase.ts          # 数据库连接状态管理
+│   │   ├── useDatabase.ts          # 数据库连接（Keychain 密码）
 │   │   └── useTauri.ts             # Tauri 快捷键 / 剪贴板
 │   ├── data/
 │   │   ├── providers.ts            # 7 个模型提供商预设
 │   │   ├── config.ts               # 配置管理（localStorage）
 │   │   └── schema.json             # 示例 Schema（5 张表）
-│   └── types/index.ts              # 类型定义
+│   └── types/index.ts              # 类型定义（含 IR 类型）
 ├── src-tauri/                      # Rust 后端
 │   ├── src/
-│   │   ├── lib.rs                  # 入口 + 命令注册
+│   │   ├── lib.rs                  # 入口 + 命令注册 + 插件注册
 │   │   └── db/
-│   │       ├── mod.rs              # 连接池管理（MySql/Pg/Sqlite）
+│   │       ├── mod.rs              # 连接池管理（RwLock）
 │   │       ├── schema.rs           # Schema 类型定义
-│   │       └── commands.rs         # Tauri 数据库命令
+│   │       └── commands.rs         # DB 连接 + Keyring CRUD
 │   ├── icons/                      # 应用图标（多尺寸）
 │   ├── capabilities/               # Tauri 权限配置
 │   └── tauri.conf.json             # 窗口 / 打包配置
@@ -352,9 +444,11 @@ sql-prompt-copilot/
 | 样式 | Tailwind CSS v4 + Shadcn UI | 深色毛玻璃主题 |
 | 动画 | Framer Motion | 丝滑过渡效果 |
 | 可视化 | React Flow | DAG 流程图渲染 |
-| SQL 解析 | node-sql-parser | AST → DAG 编译级处理 |
+| SQL 解析 | node-sql-parser | AST → IR → DAG 编译级处理 |
 | DB 驱动 | sqlx (Rust) | MySQL / PostgreSQL / SQLite |
 | AI 接口 | 统一适配层 | OpenAI / Anthropic 格式 |
+| 安全 | keyring (Rust) | 系统 Keychain 密码存储 |
+| 历史 | tauri-plugin-sql (SQLite) | 查询历史持久化 |
 
 ---
 
@@ -363,10 +457,10 @@ sql-prompt-copilot/
 | 指标 | 数值 |
 |------|------|
 | SQL 生成成功率 | 85%+ |
-| Schema 匹配准确率 | 90%+ |
+| Schema 匹配准确率 | 95%+（BM25 + 同义词） |
 | 平均响应时间 | < 2s |
 | 支持 Schema 规模 | 50+ 表 / 500+ 字段 |
-| AST 解析覆盖 | SELECT（MySQL 方言） |
+| AST 解析覆盖 | SELECT/INSERT/UPDATE/DELETE（MySQL/PG/SQLite） |
 | 应用体积 | ~6MB |
 | 运行内存 | ~30MB |
 
@@ -374,17 +468,28 @@ sql-prompt-copilot/
 
 ## Roadmap
 
+### 已完成 ✅
+
+- [x] 查询历史记录（SQLite 持久化 + 搜索 + 收藏）
+- [x] PostgreSQL / SQLite AST 支持（统一 IR）
+- [x] INSERT / UPDATE / DELETE 可视化
+- [x] BM25 语义匹配 + 同义词扩展
+- [x] 系统 Keychain 密码安全存储
+- [x] Prompt 规则从 5 条扩展到 10 条（时区/NULL/类型/聚合/翻页/矛盾）
+- [x] WHERE 列名幻觉检测（sqlValidator 增强）
+- [x] 12 条生产坑位测试集（全部通过）
+
 ### 近期
 
 - [ ] SQL EXPLAIN 执行计划可视化
-- [ ] 查询历史记录
 - [ ] Schema 可视化编辑器
+- [ ] DAG 区域可拖拽调整高度
 
 ### 中期
 
 - [ ] 数据血缘分析
 - [ ] 团队共享查询模板
-- [ ] PostgreSQL / SQLite AST 支持
+- [ ] 向量检索升级（本地 embedding 模型）
 
 ### 长期
 
