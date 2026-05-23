@@ -134,7 +134,7 @@ function extractColumns(columns: unknown): IRColumn[] {
   if (!Array.isArray(columns)) return [{ name: "*", isStar: true }];
   return columns.map((c: Record<string, unknown>) => {
     const expr = c.expr as Record<string, unknown> | undefined;
-    if (expr?.type === "star") return { name: "*", isStar: true };
+    if (expr?.type === "star" || (expr?.type === "column_ref" && expr?.column === "*")) return { name: "*", isStar: true };
     const name = (expr?.column as string) || (expr?.value as string) || String(c);
     const aggregation = expr?.type === "aggr_func" ? (expr.name as string)?.toUpperCase() as IRColumn["aggregation"] : undefined;
     return {
@@ -173,9 +173,10 @@ function extractOrderBy(orderBy: Array<Record<string, unknown>> | null): IRInter
   }));
 }
 
-function extractGroupBy(groupBy: Array<Record<string, unknown>> | null): string[] {
+function extractGroupBy(groupBy: Array<Record<string, unknown>> | Record<string, unknown> | null): string[] {
   if (!groupBy) return [];
-  return groupBy.map((g) => (g.column as string) || (g.value as string) || "?");
+  const arr = Array.isArray(groupBy) ? groupBy : [groupBy];
+  return arr.map((g) => (g.column as string) || (g.value as string) || "?");
 }
 
 function extractLimit(limit: Record<string, unknown> | null): number | null {
@@ -190,6 +191,9 @@ function hasSelectStar(columns: unknown): boolean {
   if (Array.isArray(columns)) {
     return columns.some((c: unknown) => {
       const col = c as Record<string, unknown>;
+      // Check IR format (isStar property)
+      if (col.isStar === true) return true;
+      // Check AST format (expr.type === "star")
       return (col.expr as Record<string, unknown>)?.type === "star" || String(col) === "*";
     });
   }
