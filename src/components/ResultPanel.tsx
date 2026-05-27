@@ -1,9 +1,11 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Copy, FileText, GitBranch, ListChecks, AlertTriangle } from "lucide-react";
-import { useCallback } from "react";
+import { Copy, FileText, GitBranch, ListChecks, AlertTriangle, Check, Send, BookOpen } from "lucide-react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DAGVisualization } from "@/components/DAGVisualization";
 import { showToast } from "@/components/Toast";
+import { SendToFeishuDialog } from "@/components/SendToFeishuDialog";
+import { CorrectionDialog } from "@/components/CorrectionDialog";
 import type { AIResponse, Modification, DAGNode, DAGEdge } from "@/types";
 import type { ValidationResult } from "@/lib/sqlValidator";
 import type { AnalysisWarning } from "@/lib/sqlParser";
@@ -18,12 +20,15 @@ interface ResultPanelProps {
   analysis?: AnalysisWarning[];
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label = "复制" }: { text: string; label?: string }) {
   const copy = useClipboard();
+  const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
     await copy(text);
+    setCopied(true);
     showToast("success", "已复制到剪贴板");
+    setTimeout(() => setCopied(false), 2000);
   }, [text, copy]);
 
   return (
@@ -33,8 +38,8 @@ function CopyButton({ text }: { text: string }) {
       onClick={handleCopy}
       className="h-8 px-3 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
     >
-      <Copy className="h-3.5 w-3.5" />
-      复制
+      {copied ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
+      {copied ? "已复制" : label}
     </Button>
   );
 }
@@ -81,6 +86,9 @@ const itemVariants = {
 };
 
 export function ResultPanel({ result, visible, validation, astNodes, astEdges, analysis }: ResultPanelProps) {
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false);
+
   if (!result) return null;
 
   return (
@@ -91,7 +99,7 @@ export function ResultPanel({ result, visible, validation, astNodes, astEdges, a
           initial="hidden"
           animate="visible"
           exit="exit"
-          className="w-full overflow-hidden space-y-4"
+          className="w-full overflow-visible space-y-4"
         >
           {/* Validation Warnings */}
           {validation && validation.warnings.length > 0 && (
@@ -111,6 +119,27 @@ export function ResultPanel({ result, visible, validation, astNodes, astEdges, a
             </motion.div>
           )}
 
+          {/* Action Buttons */}
+          <motion.div variants={itemVariants} className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setSendDialogOpen(true)}
+              className="text-xs gap-1.5"
+            >
+              <Send className="h-3.5 w-3.5" />
+              发送至飞书
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCorrectionDialogOpen(true)}
+              className="text-xs gap-1.5"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              纠错
+            </Button>
+          </motion.div>
+
           {/* Optimized Prompt Panel */}
           <motion.div
             variants={itemVariants}
@@ -125,7 +154,7 @@ export function ResultPanel({ result, visible, validation, astNodes, astEdges, a
               </div>
               <CopyButton text={result.optimized_prompt} />
             </div>
-            <pre className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap font-mono bg-background/50 rounded-lg p-3 max-h-40 overflow-y-auto selectable">
+            <pre className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap font-mono bg-background/50 rounded-lg p-3 max-h-60 overflow-y-auto selectable">
               {result.optimized_prompt}
             </pre>
           </motion.div>
@@ -150,30 +179,43 @@ export function ResultPanel({ result, visible, validation, astNodes, astEdges, a
             </motion.div>
           )}
 
-          {/* DAG Panel (AST-based) */}
-          <motion.div
-            variants={itemVariants}
-            className="rounded-xl bg-secondary/20 border border-border/30 p-4"
-          >
-            <div className="flex items-center gap-2 mb-3">
-              <GitBranch className="h-4 w-4 text-primary" />
-              <h3 className="text-sm font-medium text-foreground">
-                SQL 执行逻辑可视化
-              </h3>
-              {astNodes && astNodes.length > 0 && astNodes !== result.dag_nodes && (
-                <span className="text-[10px] text-primary/60 bg-primary/10 px-1.5 py-0.5 rounded">
-                  AST 解析
-                </span>
-              )}
-            </div>
-            <DAGVisualization
-              nodes={astNodes || result.dag_nodes}
-              edges={astEdges || result.dag_edges}
-              analysis={analysis}
-            />
-          </motion.div>
+          {/* DAG Panel (AST-based) - 仅在有节点时显示 */}
+          {(astNodes && astNodes.length > 0) || (result.dag_nodes && result.dag_nodes.length > 0) ? (
+            <motion.div
+              variants={itemVariants}
+              className="rounded-xl bg-secondary/20 border border-border/30 p-4"
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <GitBranch className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-medium text-foreground">
+                  SQL 执行逻辑可视化
+                </h3>
+                {astNodes && astNodes.length > 0 && astNodes !== result.dag_nodes && (
+                  <span className="text-[10px] text-primary/60 bg-primary/10 px-1.5 py-0.5 rounded">
+                    AST 解析
+                  </span>
+                )}
+              </div>
+              <DAGVisualization
+                nodes={astNodes || result.dag_nodes}
+                edges={astEdges || result.dag_edges}
+                analysis={analysis}
+              />
+            </motion.div>
+          ) : null}
         </motion.div>
       )}
+
+      {/* Dialogs */}
+      <SendToFeishuDialog
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+        prompt={result?.optimized_prompt || ""}
+      />
+      <CorrectionDialog
+        open={correctionDialogOpen}
+        onClose={() => setCorrectionDialogOpen(false)}
+      />
     </AnimatePresence>
   );
 }
